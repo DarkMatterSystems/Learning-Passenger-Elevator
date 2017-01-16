@@ -1,0 +1,1256 @@
+
+System:Passenger_Elevator
+
+    | Copyright (C) 2017 Dark Matter Systems Ltd. All rights reserved.
+
+    Description
+        Paragraph:Title
+            The Passenger Elevator Model
+
+    Type
+        BaseType
+            Integer
+                Floor : 1 .. 10
+            Boolean
+                Flag
+            Enumeration
+                Literal:Direction
+                    UP
+                    DOWN
+
+    Matrix:Model:Application
+        Silo:M1:Software_Application
+            Realm:Analysis_Of_Application
+                Domain:Elevator_Management
+
+                    EventContext
+                        ImportEvent
+                            |
+                            | Domain: Controls
+                            |
+                            |     Source: Floor Passenger
+                            Floor : Request_service
+                            |
+                            |     Source: Car Passenger
+                            Car      : Open_door
+                            Car      : Close_door
+                            Car_Stop : Go_to_floor
+                            |
+                            | Domain: Machinery
+                            |
+                            |     Source: Door Sensors
+                            Door : Open_completed
+                            Door : Obstruction
+                            Door : Clear
+                            Door : Close_completed
+                            |
+                            |     Source: Car Sensors
+                            Car : Moving
+                            Car : Floor_approaching
+                            Car : Car_stopped
+
+                    |===========================================================
+
+                    Entity:Floor
+                        Attribute
+                            Floor : Number
+                        Relationship
+                            Serviced_by ->> Car_Service
+
+                        State
+
+                            |-----------
+
+                            DynamicState:Idle
+                                Transition
+                                    EventState
+                                        Request_service -> Calling_Service
+                                    CannotHappen
+                                        Service_called
+
+                            |-----------
+
+                            DynamicState:Calling_Service
+                                StateAction
+
+                                    | Find the service assigner and send a car assignment request.
+                                    Traverse
+                                        Navigation
+                                            Floor : Serviced_by : Car_Service
+                                        TraverseSelection
+                                            SelectionHead
+                                                Traverse
+                                                    Navigation
+                                                        Car_Service : Assigned_by : Service_Assigner
+                                                    TraverseSelection
+                                                        GenerateEvent
+                                                            Floor : Service_called
+                                                        GenerateDataEvent:Service_Assigner:Assign_car
+                                                            Floor : Floor.Number
+
+                                Transition
+                                    EventState
+                                        Service_called -> Idle
+                                    CannotHappen
+                                        Request_service
+
+                    |===========================================================
+
+                    Entity:Door
+                        Relationship
+                            Provides_passenger_access_to --> Car
+
+                        State
+
+                            |-----------
+
+                            DynamicState:Closed
+                                StateAction
+                                    Traverse
+                                        Navigation
+                                            Door : Provides_passenger_access_to : Car
+                                        TraverseSelection
+                                            GenerateEvent
+                                                Car : Door_closed
+                                Transition
+                                    EventState
+                                        Open -> Opening
+                                    IgnoreEvent
+                                        Close
+                                    CannotHappen
+                                        Obstruction
+                                        Open_completed
+                                        Close_completed
+                                        Clear
+
+                            |-----------
+
+                            DynamicState:Opening
+                                StateAction
+                                    Template
+                                        <<:>>EVENT -> Machinery::Door_Opening
+                                        <<:>>
+                                Transition
+                                    EventState
+                                        Open_completed -> Open
+                                    IgnoreEvent
+                                        Open
+                                        Close
+                                        Obstruction
+                                    CannotHappen
+                                        Close_completed
+                                        Clear
+
+                            |-----------
+
+                            DynamicState:Open
+                                StateAction
+                                    Traverse
+                                        Navigation
+                                            Door : Provides_passenger_access_to : Car
+                                        TraverseSelection
+                                            GenerateEvent
+                                                Car : Door_open
+                                Transition
+                                    EventState
+                                        Close -> Closing
+                                    IgnoreEvent
+                                        Open
+                                        Obstruction
+                                    CannotHappen
+                                        Open_completed
+                                        Close_completed
+                                        Clear
+
+                            |-----------
+
+                            DynamicState:Closing
+                                StateAction
+                                    Template
+                                        <<:>>EVENT -> Machinery::Door_Closing
+                                        <<:>>
+                                Transition
+                                    EventState
+                                        Obstruction     -> Avoiding_Obstruction
+                                        Close_completed -> Closed
+                                    IgnoreEvent
+                                        Open
+                                        Close
+                                    CannotHappen
+                                        Open_completed
+                                        Clear
+
+                            |-----------
+
+                            DynamicState:Avoiding_Obstruction
+                                Transition
+                                    EventState
+                                        Clear -> Closing
+                                    IgnoreEvent
+                                        Open
+                                        Close
+                                        Obstruction
+                                    CannotHappen
+                                        Open_completed
+                                        Close_completed
+
+                    |===========================================================
+
+                    Entity:Car_Service
+                        Relationship
+                            Services    --> Floor
+                            Serviced_by --> Car
+                            Assigned_by --> Service_Assigner
+
+                    |===========================================================
+
+                    Entity:Car_Stop
+                        Relationship
+                            Directs --> Car
+
+                        State
+
+                            Dataset:Await
+                                Floor : Desired_floor_number
+
+                            |-----------
+
+                            DynamicDataState:Awaiting_Floor:Await
+                                StateAction
+
+                                    | Desired_floor_number - The floor that a passenger inside the car
+                                    | wishes to travel to.
+
+                                    | Find the passenger's desired floor.
+                                    Traverse
+                                        Navigation
+                                            Car_Stop    : Directs  : Car
+                                            Car         : Services : Car_Service
+                                            Car_Service : Services : Floor
+                                        TraverseSelection
+                                            CaseSelection
+                                                WhenCase
+                                                    ConditionAnd
+                                                        TestAnd
+                                                            Floor.Number == Desired_floor_number
+                                                    WhenCaseSelection
+
+                                                        | Find the car's current floor.
+                                                        Traverse
+                                                            Navigation
+                                                                Car_Stop : Directs      : Car
+                                                                Car      : Currently_at : Floor
+                                                            TraverseSelection
+
+                                                                | Arrange to stop on the requested floor.
+                                                                CaseSelection
+
+                                                                    | If passenger's desired floor is higher or
+                                                                    | the same as the car's current floor then
+                                                                    | create an up stop.
+                                                                    WhenCase
+                                                                        ConditionAnd
+                                                                            TestAnd
+                                                                                Floor.Number <= Floor^1.Number
+                                                                        WhenCaseSelection
+                                                                            Relate
+                                                                                Car : Scheduled_to_move_up_to : Floor^1
+
+                                                                    | If passenger's desired floor is lower than
+                                                                    | car's current floor then create a down stop.
+                                                                    WhenCase
+                                                                        ConditionAnd
+                                                                            TestAnd
+                                                                                Floor.Number >> Floor^1.Number
+                                                                        WhenCaseSelection
+                                                                            Relate
+                                                                                Car : Scheduled_to_move_down_to : Floor^1
+
+                                                                GenerateEvent
+                                                                    Car : Service_requested
+                                Transition
+                                    EventState
+                                        Go_to_floor -> Awaiting_Floor
+
+                    |===========================================================
+
+                    Entity:Service_Assigner
+                        Relationship
+                            Assigns ->> Car_Service
+
+                        State
+
+                            Dataset:Allocate
+                                Floor : Floor_number
+
+                            |-----------
+
+                            DynamicState:Idle
+                                Transition
+                                    EventState
+                                        Assign_car -> Allocating_Car
+                                    CannotHappen
+                                        Car_assigned
+
+                            |-----------
+
+                            DynamicDataState:Allocating_Car:Allocate
+
+                                ProcessData
+                                    Flag : car_not_found
+
+                                StateAction
+
+                                    | Floor_number - Floor number of passenger requesting elevator.
+
+                                    Assignment
+                                        SetBoolean
+                                            car_not_found := <<True>>
+
+                                    | Find passenger's floor.
+                                    Traverse
+                                        Navigation
+                                            Service_Assigner : Assigns : Car_Service
+                                        TraverseSelection
+                                            SelectionHead
+                                                Traverse
+                                                    Navigation
+                                                        Car_Service : Serviced_by : Car
+                                                        Car         : Services    : Car_Service
+                                                        Car_Service : Services    : Floor
+                                                    TraverseSelection
+
+                                                        CaseSelection
+                                                            WhenCase
+                                                                ConditionAnd
+                                                                    TestAnd
+                                                                        Floor.Number == Floor_number
+                                                                WhenCaseSelection
+
+                                                                    | Find a free car that has no pending up stops or down stops.
+
+                                                                    | Find all cars.
+                                                                    Traverse
+                                                                        Navigation
+                                                                            Floor       : Serviced_by : Car_Service
+                                                                            Car_Service : Serviced_by : Car
+                                                                        TraverseSelection
+
+                                                                            CaseSelection
+                                                                                WhenCase
+                                                                                    ConditionAnd
+                                                                                        BooleanAnd
+                                                                                            car_not_found
+                                                                                    WhenCaseSelection
+
+                                                                                        | Determine if car has no pending up stops.
+                                                                                        Traverse
+                                                                                            Navigation
+                                                                                                Car : Scheduled_to_move_up_to : Floor
+                                                                                            NullTraverseSelection
+
+                                                                                                | Determine if car has no pending down stops.
+                                                                                                Traverse
+                                                                                                    Navigation
+                                                                                                        Car : Scheduled_to_move_down_to : Floor
+                                                                                                    NullTraverseSelection
+
+                                                                                                        | Find free car's current floor.
+                                                                                                        Traverse
+                                                                                                            Navigation
+                                                                                                                Car : Currently_at : Floor
+                                                                                                            TraverseSelection
+
+                                                                                                                CaseSelection
+
+                                                                                                                    | Create up stop if car below or same as
+                                                                                                                    | passenger's floor.
+                                                                                                                    WhenCase
+                                                                                                                        ConditionAnd
+                                                                                                                            TestAnd
+                                                                                                                                Floor.Number <= Floor_number
+                                                                                                                        WhenCaseSelection
+                                                                                                                            Relate
+                                                                                                                                Car : Scheduled_to_move_up_to : Floor^1
+
+                                                                                                                    | Create down stop if car above passenger's floor.
+                                                                                                                    WhenCase
+                                                                                                                        ConditionAnd
+                                                                                                                            TestAnd
+                                                                                                                                Floor.Number >> Floor_number
+                                                                                                                        WhenCaseSelection
+                                                                                                                            Relate
+                                                                                                                                Car : Scheduled_to_move_down_to : Floor^1
+
+                                                                                                                Assignment
+                                                                                                                    SetBoolean
+                                                                                                                        car_not_found := <<False>>
+                                                                                                                GenerateEvent
+                                                                                                                    Car : Service_requested
+
+                                                                    | If there are no free cars available
+                                                                    | then choose any car.
+                                                                    CaseSelection
+                                                                        WhenCase
+                                                                            ConditionAnd
+                                                                                BooleanAnd
+                                                                                    car_not_found
+                                                                            WhenCaseSelection
+
+                                                                                | Find all cars.
+                                                                                Traverse
+                                                                                    Navigation
+                                                                                        Floor       : Serviced_by : Car_Service
+                                                                                        Car_Service : Serviced_by : Car
+                                                                                    TraverseSelection
+
+                                                                                        | Find one car.
+                                                                                        SelectionHead
+
+                                                                                            | A car has been found.
+                                                                                            Traverse
+                                                                                                Navigation
+                                                                                                    Car : Currently_at : Floor
+                                                                                                TraverseSelection
+
+                                                                                                    CaseSelection
+
+                                                                                                        | Create up stop if car below or same as
+                                                                                                        | passenger's floor.
+                                                                                                        WhenCase
+                                                                                                            ConditionAnd
+                                                                                                                TestAnd
+                                                                                                                    Floor.Number <= Floor_number
+                                                                                                            WhenCaseSelection
+                                                                                                                Relate
+                                                                                                                    Car : Scheduled_to_move_up_to : Floor^1
+
+                                                                                                        | Create down stop if car above passenger's floor.
+                                                                                                        WhenCase
+                                                                                                            ConditionAnd
+                                                                                                                TestAnd
+                                                                                                                    Floor.Number >> Floor_number
+                                                                                                            WhenCaseSelection
+                                                                                                                Relate
+                                                                                                                    Car : Scheduled_to_move_down_to : Floor^1
+
+                                                                                                    Assignment
+                                                                                                        SetBoolean
+                                                                                                            car_not_found := <<False>>
+                                                                                                    GenerateEvent
+                                                                                                        Car : Service_requested
+
+                                    GenerateEvent
+                                        Service_Assigner : Car_assigned
+
+                                Transition
+                                    EventState
+                                        Car_assigned -> Idle
+                                    CannotHappen
+                                        Assign_car
+
+                    |===========================================================
+
+                    Entity:Car
+                        Attribute
+                            Direction : Direction
+                        Relationship
+                            Services                  ->> Car_Service
+                            Currently_at              --> Floor
+                            Accessed_through          --> Door
+                            Scheduled_to_move_up_to   |>> Floor
+                            Scheduled_to_move_down_to |>> Floor
+
+                        State
+
+                            Dataset:Travel
+                                Floor : Next_floor_number
+
+                            |-----------
+
+                            DynamicState:Stationary
+                                StateAction
+
+                                    | If there is at least one floor stop scheduled move
+                                    | to the Selecting Schedule state.
+
+                                    Traverse
+                                        Navigation
+                                            Car : Scheduled_to_move_up_to : Floor
+                                        TraverseSelection
+                                            SelectionHead
+                                                GenerateEvent
+                                                    Car : Service_requested
+                                        NullTraverseSelection
+                                            Traverse
+                                                Navigation
+                                                    Car : Scheduled_to_move_down_to : Floor
+                                                TraverseSelection
+                                                    SelectionHead
+                                                        GenerateEvent
+                                                            Car : Service_requested
+                                Transition
+                                    EventState
+                                        Service_requested -> Selecting_Schedule
+                                        Open_door         -> Opening
+                                    IgnoreEvent
+                                        Close_door
+                                    CannotHappen
+                                        Service_schedule
+                                        Service_current_floor
+                                        Moving
+                                        Floor_approaching
+                                        Continue
+                                        Stop_at_next_floor
+                                        Car_stopped
+                                        Door_open
+                                        Door_closed
+
+                            |-----------
+
+                            DynamicState:Selecting_Schedule
+
+                                ProcessData
+                                    Flag : stop_not_found
+
+                                StateAction
+
+                                    | If the car is already on a stopping floor then open
+                                    | the car doors.  Otherwise, service the car's schedule.
+
+                                    Traverse
+                                        Navigation
+                                            Car : Currently_at : Floor
+                                        TraverseSelection
+
+                                            Assignment
+                                                SetBoolean
+                                                    stop_not_found := <<True>>
+
+                                            CaseSelection
+
+                                                WhenCase
+                                                    ConditionAnd
+                                                        TestAnd
+                                                            Car.Direction == Direction'UP
+                                                    WhenCaseSelection
+
+                                                        | Scan all floors that this car is scheduled to move up to. If car is
+                                                        | already on a stopping floor then open the car's doors.  Otherwise,
+                                                        | service the car's schedule.
+                                                        Traverse
+                                                            Navigation
+                                                                Car : Scheduled_to_move_up_to : Floor
+                                                            TraverseSelection
+
+                                                                CaseSelection
+                                                                    WhenCase
+                                                                        ConditionAnd
+                                                                            BooleanAnd
+                                                                                stop_not_found
+                                                                            ContextAnd
+                                                                                Floor == Floor^1
+                                                                        WhenCaseSelection
+                                                                            GenerateEvent
+                                                                                Car : Service_current_floor
+                                                                            Assignment
+                                                                                SetBoolean
+                                                                                    stop_not_found := <<False>>
+
+                                                                SelectionLast
+                                                                    CaseSelection
+                                                                        WhenCase
+                                                                            ConditionAnd
+                                                                                BooleanAnd
+                                                                                    stop_not_found
+                                                                            WhenCaseSelection
+                                                                                GenerateEvent
+                                                                                    Car : Service_schedule
+
+                                                            NullTraverseSelection
+                                                                Traverse
+                                                                    Navigation
+                                                                        Car : Scheduled_to_move_down_to : Floor
+                                                                    TraverseSelection
+
+                                                                        Assignment
+                                                                            SetEnumeration
+                                                                                Car.Direction := Direction'DOWN
+
+                                                                        CaseSelection
+                                                                            WhenCase
+                                                                                ConditionAnd
+                                                                                    BooleanAnd
+                                                                                        stop_not_found
+                                                                                    ContextAnd
+                                                                                        Floor == Floor^1
+                                                                                WhenCaseSelection
+                                                                                    GenerateEvent
+                                                                                        Car : Service_current_floor
+                                                                                    Assignment
+                                                                                        SetBoolean
+                                                                                            stop_not_found := <<False>>
+
+                                                                        SelectionLast
+                                                                            CaseSelection
+                                                                                WhenCase
+                                                                                    ConditionAnd
+                                                                                        BooleanAnd
+                                                                                            stop_not_found
+                                                                                    WhenCaseSelection
+                                                                                        GenerateEvent
+                                                                                            Car : Service_schedule
+
+                                                WhenCase
+                                                    ConditionAnd
+                                                        TestAnd
+                                                            Car.Direction == Direction'DOWN
+                                                    WhenCaseSelection
+
+                                                        | Scan all floors that this car is scheduled to move down to. If car is
+                                                        | already on a stopping floor then open the car's doors.  Otherwise,
+                                                        | service the car's schedule.
+                                                        Traverse
+                                                            Navigation
+                                                                Car : Scheduled_to_move_down_to : Floor
+                                                            TraverseSelection
+                                                                CaseSelection
+                                                                    WhenCase
+                                                                        ConditionAnd
+                                                                            BooleanAnd
+                                                                                stop_not_found
+                                                                            ContextAnd
+                                                                                Floor == Floor^1
+                                                                        WhenCaseSelection
+                                                                            GenerateEvent
+                                                                                Car : Service_current_floor
+                                                                            Assignment
+                                                                                SetBoolean
+                                                                                    stop_not_found := <<False>>
+                                                                SelectionLast
+                                                                    CaseSelection
+                                                                        WhenCase
+                                                                            ConditionAnd
+                                                                                BooleanAnd
+                                                                                    stop_not_found
+                                                                            WhenCaseSelection
+                                                                                GenerateEvent
+                                                                                    Car : Service_schedule
+
+                                                            NullTraverseSelection
+
+                                                                Traverse
+                                                                    Navigation
+                                                                        Car : Scheduled_to_move_up_to : Floor
+                                                                    TraverseSelection
+
+                                                                        Assignment
+                                                                            SetEnumeration
+                                                                                Car.Direction := Direction'UP
+
+                                                                        CaseSelection
+                                                                            WhenCase
+                                                                                ConditionAnd
+                                                                                    BooleanAnd
+                                                                                        stop_not_found
+                                                                                    ContextAnd
+                                                                                        Floor == Floor^1
+                                                                                WhenCaseSelection
+                                                                                    GenerateEvent
+                                                                                        Car : Service_current_floor
+                                                                                    Assignment
+                                                                                        SetBoolean
+                                                                                            stop_not_found := <<False>>
+
+                                                                        SelectionLast
+                                                                            CaseSelection
+                                                                                WhenCase
+                                                                                    ConditionAnd
+                                                                                        BooleanAnd
+                                                                                            stop_not_found
+                                                                                    WhenCaseSelection
+                                                                                        GenerateEvent
+                                                                                            Car : Service_schedule
+
+                                Transition
+                                    EventState
+                                        Service_schedule      -> Servicing_Schedule
+                                        Service_current_floor -> Opening
+                                    IgnoreEvent
+                                        Service_requested
+                                        Open_door
+                                        Close_door
+                                    CannotHappen
+                                        Moving
+                                        Floor_approaching
+                                        Continue
+                                        Stop_at_next_floor
+                                        Car_stopped
+                                        Door_open
+                                        Door_closed
+
+                            |-----------
+
+                            DynamicState:Servicing_Schedule
+                                StateAction
+
+                                    CaseSelection
+                                        WhenCase
+                                            ConditionAnd
+                                                TestAnd
+                                                    Car.Direction == Direction'UP
+                                            WhenCaseSelection
+                                                Template
+                                                    <<:>>EVENT -> Machinery::Moving (Direction:UP)
+                                                    <<:>>
+                                        WhenCase
+                                            ConditionAnd
+                                                TestAnd
+                                                    Car.Direction == Direction'DOWN
+                                            WhenCaseSelection
+                                                Template
+                                                    <<:>>EVENT -> Machinery::Moving (Direction:DOWN)
+                                                    <<:>>
+
+                                Transition
+                                    EventState
+                                        Moving -> Moving
+                                    IgnoreEvent
+                                        Service_requested
+                                        Open_door
+                                        Close_door
+                                    CannotHappen
+                                        Service_schedule
+                                        Service_current_floor
+                                        Floor_approaching
+                                        Continue
+                                        Stop_at_next_floor
+                                        Car_stopped
+                                        Door_open
+                                        Door_closed
+
+                            |-----------
+
+                            DynamicState:Moving
+                                Transition
+                                    EventState
+                                        Floor_approaching -> Checking_Schedule
+                                    IgnoreEvent
+                                        Service_requested
+                                        Open_door
+                                        Close_door
+                                    CannotHappen
+                                        Service_schedule
+                                        Service_current_floor
+                                        Moving
+                                        Continue
+                                        Stop_at_next_floor
+                                        Car_stopped
+                                        Door_open
+                                        Door_closed
+
+                            |-----------
+
+                            DynamicDataState:Checking_Schedule:Travel
+
+                                ProcessData
+                                    Flag : stop_not_found
+
+                                StateAction
+
+                                    | If the car is approaching the destination floor prepare
+                                    | the car to slow down.  If not then continue to monitor
+                                    | approaching floors.
+
+                                    Assignment
+                                        SetBoolean
+                                            stop_not_found := <<True>>
+
+                                    | Unset car's current floor.
+                                    Traverse
+                                        Navigation
+                                            Car : Currently_at : Floor
+                                        TraverseSelection
+                                            Unrelate
+                                                Car : Currently_at : Floor
+
+                                    | Find all floors.
+                                    Traverse
+                                        Navigation
+                                            Car         : Services : Car_Service
+                                            Car_Service : Services : Floor
+                                        TraverseSelection
+
+                                            | Set car's current floor.
+                                            CaseSelection
+                                                WhenCase
+                                                    ConditionAnd
+                                                        TestAnd
+                                                            Floor.Number == Next_floor_number
+                                                    WhenCaseSelection
+                                                        Relate
+                                                            Car : Currently_at : Floor
+
+                                                        | Determine cars direction.
+                                                        CaseSelection
+
+                                                            WhenCase
+                                                                ConditionAnd
+                                                                    TestAnd
+                                                                        Car.Direction == Direction'UP
+                                                                WhenCaseSelection
+
+                                                                    | Find the target floor.
+                                                                    Traverse
+                                                                        Navigation
+                                                                            Car : Scheduled_to_move_up_to : Floor
+                                                                        TraverseSelection
+
+                                                                            | If approaching destination floor move to Slowing state.
+                                                                            CaseSelection
+                                                                                WhenCase
+                                                                                    ConditionAnd
+                                                                                        BooleanAnd
+                                                                                            stop_not_found
+                                                                                        TestAnd
+                                                                                            Floor.Number == Next_floor_number
+                                                                                    WhenCaseSelection
+                                                                                        GenerateEvent
+                                                                                            Car : Stop_at_next_floor
+                                                                                        Assignment
+                                                                                            SetBoolean
+                                                                                                stop_not_found := <<False>>
+
+                                                                            | Continue if destination floor not reached.
+                                                                            SelectionLast
+                                                                                CaseSelection
+                                                                                    WhenCase
+                                                                                        ConditionAnd
+                                                                                            BooleanAnd
+                                                                                                stop_not_found
+                                                                                        WhenCaseSelection
+                                                                                            GenerateEvent
+                                                                                                Car : Continue
+
+                                                            WhenCase
+                                                                ConditionAnd
+                                                                    TestAnd
+                                                                        Car.Direction == Direction'DOWN
+                                                                WhenCaseSelection
+
+                                                                    | Find the target floor.
+                                                                    Traverse
+                                                                        Navigation
+                                                                            Car : Scheduled_to_move_down_to : Floor
+                                                                        TraverseSelection
+
+                                                                            | If approaching destination floor move to Slowing state.
+                                                                            CaseSelection
+                                                                                WhenCase
+                                                                                    ConditionAnd
+                                                                                        BooleanAnd
+                                                                                            stop_not_found
+                                                                                        TestAnd
+                                                                                            Floor.Number == Next_floor_number
+                                                                                    WhenCaseSelection
+                                                                                        GenerateEvent
+                                                                                            Car : Stop_at_next_floor
+                                                                                        Assignment
+                                                                                            SetBoolean
+                                                                                                stop_not_found := <<False>>
+
+                                                                            | Continue if destination floor not reached.
+                                                                            SelectionLast
+                                                                                CaseSelection
+                                                                                    WhenCase
+                                                                                        ConditionAnd
+                                                                                            BooleanAnd
+                                                                                                stop_not_found
+                                                                                        WhenCaseSelection
+                                                                                            GenerateEvent
+                                                                                                Car : Continue
+
+                                Transition
+                                    EventState
+                                        Continue           -> Moving
+                                        Stop_at_next_floor -> Slowing
+                                    IgnoreEvent
+                                        Service_requested
+                                        Open_door
+                                        Close_door
+                                    CannotHappen
+                                        Service_schedule
+                                        Service_current_floor
+                                        Moving
+                                        Floor_approaching
+                                        Car_stopped
+                                        Door_open
+                                        Door_closed
+
+                            |-----------
+
+                            DynamicState:Slowing
+                                StateAction
+                                    Template
+                                        <<:>>EVENT -> Machinery::Car.Slowing ()
+                                        <<:>>
+                                Transition
+                                    EventState
+                                        Car_stopped -> Opening
+                                    IgnoreEvent
+                                        Open_door
+                                        Service_requested
+                                        Close_door
+                                    CannotHappen
+                                        Service_schedule
+                                        Service_current_floor
+                                        Moving
+                                        Floor_approaching
+                                        Continue
+                                        Stop_at_next_floor
+                                        Door_open
+                                        Door_closed
+
+                            |-----------
+
+                            DynamicState:Opening
+                                StateAction
+                                    Traverse
+                                        Navigation
+                                            Car : Accessed_through : Door
+                                        TraverseSelection
+                                            GenerateEvent
+                                                Door : Open
+                                Transition
+                                    EventState
+                                        Door_open -> Accessible
+                                    IgnoreEvent
+                                        Close_door
+                                        Service_requested
+                                        Open_door
+                                    CannotHappen
+                                        Service_schedule
+                                        Service_current_floor
+                                        Moving
+                                        Floor_approaching
+                                        Continue
+                                        Stop_at_next_floor
+                                        Car_stopped
+                                        Door_closed
+
+                            |-----------
+
+                            DynamicState:Accessible
+                                StateAction
+
+                                    | Find and remove scheduled stops to the destination
+                                    | floor for the car's direction.
+
+                                    | Find cars current floor.
+                                    Traverse
+                                        Navigation
+                                            Car : Currently_at : Floor
+                                        TraverseSelection
+                                            CaseSelection
+
+                                                | Determine if car's direction is up.
+                                                WhenCase
+                                                    ConditionAnd
+                                                        TestAnd
+                                                            Car.Direction == Direction'UP
+                                                    WhenCaseSelection
+
+                                                        | Find and remove all scheduled up stops to destination floor.
+                                                        Traverse
+                                                            Navigation
+                                                                Car : Scheduled_to_move_up_to : Floor
+                                                            TraverseSelection
+                                                                CaseSelection
+                                                                    WhenCase
+                                                                        ConditionAnd
+                                                                            ContextAnd
+                                                                                Floor == Floor^1
+                                                                        WhenCaseSelection
+                                                                            Unrelate
+                                                                                Car : Scheduled_to_move_up_to : Floor
+
+                                                | Determine if car's direction is down.
+                                                WhenCase
+                                                    ConditionAnd
+                                                        TestAnd
+                                                            Car.Direction == Direction'DOWN
+                                                    WhenCaseSelection
+
+                                                        | Find and remove all scheduled down stops to destination floor.
+                                                        Traverse
+                                                            Navigation
+                                                                Car : Scheduled_to_move_down_to : Floor
+                                                            TraverseSelection
+                                                                CaseSelection
+                                                                    WhenCase
+                                                                        ConditionAnd
+                                                                            ContextAnd
+                                                                                Floor == Floor^1
+                                                                        WhenCaseSelection
+                                                                            Unrelate
+                                                                                Car : Scheduled_to_move_down_to : Floor
+
+                                Transition
+                                    EventState
+                                        Close_door -> Closing
+                                    IgnoreEvent
+                                        Open_door
+                                        Service_requested
+                                    CannotHappen
+                                        Service_schedule
+                                        Service_current_floor
+                                        Moving
+                                        Floor_approaching
+                                        Continue
+                                        Stop_at_next_floor
+                                        Car_stopped
+                                        Door_open
+                                        Door_closed
+
+                            |-----------
+
+                            DynamicState:Closing
+                                StateAction
+                                    Traverse
+                                        Navigation
+                                            Car : Accessed_through : Door
+                                        TraverseSelection
+                                            GenerateEvent
+                                                Door : Close
+                                Transition
+                                    EventState
+                                        Open_door   -> Opening
+                                        Door_closed -> Stationary
+                                    IgnoreEvent
+                                        Service_requested
+                                        Door_open
+                                        Close_door
+                                    CannotHappen
+                                        Service_schedule
+                                        Service_current_floor
+                                        Moving
+                                        Floor_approaching
+                                        Continue
+                                        Stop_at_next_floor
+                                        Car_stopped
+
+        |=======================================================================
+
+        Silo:M0:Real_World_Objects
+            RealmObject:Objects_Of_Application
+                DomainObject:Elevator_Management
+
+                    EntityObject:Floor
+                        Object
+                            | Identity | State | Number
+                            FLOOR_001  :  Idle :      1
+                            FLOOR_002  :  Idle :      2
+                            FLOOR_003  :  Idle :      3
+                            FLOOR_004  :  Idle :      4
+                            FLOOR_005  :  Idle :      5
+                            FLOOR_006  :  Idle :      6
+                            FLOOR_007  :  Idle :      7
+                        ObjectRelation:Serviced_by:Car_Service
+                            FLOOR_001 : CAR_001_FLOOR_001_SERVICE_001
+                            FLOOR_001 : CAR_002_FLOOR_001_SERVICE_008
+                            FLOOR_001 : CAR_003_FLOOR_001_SERVICE_015
+                            FLOOR_002 : CAR_001_FLOOR_002_SERVICE_002
+                            FLOOR_002 : CAR_002_FLOOR_002_SERVICE_009
+                            FLOOR_002 : CAR_003_FLOOR_002_SERVICE_016
+                            FLOOR_003 : CAR_001_FLOOR_003_SERVICE_003
+                            FLOOR_003 : CAR_002_FLOOR_003_SERVICE_010
+                            FLOOR_003 : CAR_003_FLOOR_003_SERVICE_017
+                            FLOOR_004 : CAR_001_FLOOR_004_SERVICE_004
+                            FLOOR_004 : CAR_002_FLOOR_004_SERVICE_011
+                            FLOOR_004 : CAR_003_FLOOR_004_SERVICE_018
+                            FLOOR_005 : CAR_001_FLOOR_005_SERVICE_005
+                            FLOOR_005 : CAR_002_FLOOR_005_SERVICE_012
+                            FLOOR_005 : CAR_003_FLOOR_005_SERVICE_019
+                            FLOOR_006 : CAR_001_FLOOR_006_SERVICE_006
+                            FLOOR_006 : CAR_002_FLOOR_006_SERVICE_013
+                            FLOOR_006 : CAR_003_FLOOR_006_SERVICE_020
+                            FLOOR_007 : CAR_001_FLOOR_007_SERVICE_007
+                            FLOOR_007 : CAR_002_FLOOR_007_SERVICE_014
+                            FLOOR_007 : CAR_003_FLOOR_007_SERVICE_021
+
+                    EntityObject:Door
+                        Object
+                            | Identity | State
+                            DOOR_001   : Closed
+                            DOOR_002   : Closed
+                            DOOR_003   : Closed
+                        ObjectRelation:Provides_passenger_access_to:Car
+                            DOOR_001 : CAR_001
+                            DOOR_002 : CAR_002
+                            DOOR_003 : CAR_003
+
+                    EntityObject:Car_Service
+                        Object
+                            | Identity
+                            CAR_001_FLOOR_001_SERVICE_001
+                            CAR_001_FLOOR_002_SERVICE_002
+                            CAR_001_FLOOR_003_SERVICE_003
+                            CAR_001_FLOOR_004_SERVICE_004
+                            CAR_001_FLOOR_005_SERVICE_005
+                            CAR_001_FLOOR_006_SERVICE_006
+                            CAR_001_FLOOR_007_SERVICE_007
+                            CAR_002_FLOOR_001_SERVICE_008
+                            CAR_002_FLOOR_002_SERVICE_009
+                            CAR_002_FLOOR_003_SERVICE_010
+                            CAR_002_FLOOR_004_SERVICE_011
+                            CAR_002_FLOOR_005_SERVICE_012
+                            CAR_002_FLOOR_006_SERVICE_013
+                            CAR_002_FLOOR_007_SERVICE_014
+                            CAR_003_FLOOR_001_SERVICE_015
+                            CAR_003_FLOOR_002_SERVICE_016
+                            CAR_003_FLOOR_003_SERVICE_017
+                            CAR_003_FLOOR_004_SERVICE_018
+                            CAR_003_FLOOR_005_SERVICE_019
+                            CAR_003_FLOOR_006_SERVICE_020
+                            CAR_003_FLOOR_007_SERVICE_021
+                        ObjectRelation:Serviced_by:Car
+                            CAR_001_FLOOR_001_SERVICE_001 : CAR_001
+                            CAR_001_FLOOR_002_SERVICE_002 : CAR_001
+                            CAR_001_FLOOR_003_SERVICE_003 : CAR_001
+                            CAR_001_FLOOR_004_SERVICE_004 : CAR_001
+                            CAR_001_FLOOR_005_SERVICE_005 : CAR_001
+                            CAR_001_FLOOR_006_SERVICE_006 : CAR_001
+                            CAR_001_FLOOR_007_SERVICE_007 : CAR_001
+                            CAR_002_FLOOR_001_SERVICE_008 : CAR_002
+                            CAR_002_FLOOR_002_SERVICE_009 : CAR_002
+                            CAR_002_FLOOR_003_SERVICE_010 : CAR_002
+                            CAR_002_FLOOR_004_SERVICE_011 : CAR_002
+                            CAR_002_FLOOR_005_SERVICE_012 : CAR_002
+                            CAR_002_FLOOR_006_SERVICE_013 : CAR_002
+                            CAR_002_FLOOR_007_SERVICE_014 : CAR_002
+                            CAR_003_FLOOR_001_SERVICE_015 : CAR_003
+                            CAR_003_FLOOR_002_SERVICE_016 : CAR_003
+                            CAR_003_FLOOR_003_SERVICE_017 : CAR_003
+                            CAR_003_FLOOR_004_SERVICE_018 : CAR_003
+                            CAR_003_FLOOR_005_SERVICE_019 : CAR_003
+                            CAR_003_FLOOR_006_SERVICE_020 : CAR_003
+                            CAR_003_FLOOR_007_SERVICE_021 : CAR_003
+                        ObjectRelation:Services:Floor
+                            CAR_001_FLOOR_001_SERVICE_001 : FLOOR_001
+                            CAR_001_FLOOR_002_SERVICE_002 : FLOOR_002
+                            CAR_001_FLOOR_003_SERVICE_003 : FLOOR_003
+                            CAR_001_FLOOR_004_SERVICE_004 : FLOOR_004
+                            CAR_001_FLOOR_005_SERVICE_005 : FLOOR_005
+                            CAR_001_FLOOR_006_SERVICE_006 : FLOOR_006
+                            CAR_001_FLOOR_007_SERVICE_007 : FLOOR_007
+                            CAR_002_FLOOR_001_SERVICE_008 : FLOOR_001
+                            CAR_002_FLOOR_002_SERVICE_009 : FLOOR_002
+                            CAR_002_FLOOR_003_SERVICE_010 : FLOOR_003
+                            CAR_002_FLOOR_004_SERVICE_011 : FLOOR_004
+                            CAR_002_FLOOR_005_SERVICE_012 : FLOOR_005
+                            CAR_002_FLOOR_006_SERVICE_013 : FLOOR_006
+                            CAR_002_FLOOR_007_SERVICE_014 : FLOOR_007
+                            CAR_003_FLOOR_001_SERVICE_015 : FLOOR_001
+                            CAR_003_FLOOR_002_SERVICE_016 : FLOOR_002
+                            CAR_003_FLOOR_003_SERVICE_017 : FLOOR_003
+                            CAR_003_FLOOR_004_SERVICE_018 : FLOOR_004
+                            CAR_003_FLOOR_005_SERVICE_019 : FLOOR_005
+                            CAR_003_FLOOR_006_SERVICE_020 : FLOOR_006
+                            CAR_003_FLOOR_007_SERVICE_021 : FLOOR_007
+                        ObjectRelation:Assigned_by:Service_Assigner
+                            CAR_001_FLOOR_001_SERVICE_001 : ASSIGNER
+                            CAR_001_FLOOR_002_SERVICE_002 : ASSIGNER
+                            CAR_001_FLOOR_003_SERVICE_003 : ASSIGNER
+                            CAR_001_FLOOR_004_SERVICE_004 : ASSIGNER
+                            CAR_001_FLOOR_005_SERVICE_005 : ASSIGNER
+                            CAR_001_FLOOR_006_SERVICE_006 : ASSIGNER
+                            CAR_001_FLOOR_007_SERVICE_007 : ASSIGNER
+                            CAR_002_FLOOR_001_SERVICE_008 : ASSIGNER
+                            CAR_002_FLOOR_002_SERVICE_009 : ASSIGNER
+                            CAR_002_FLOOR_003_SERVICE_010 : ASSIGNER
+                            CAR_002_FLOOR_004_SERVICE_011 : ASSIGNER
+                            CAR_002_FLOOR_005_SERVICE_012 : ASSIGNER
+                            CAR_002_FLOOR_006_SERVICE_013 : ASSIGNER
+                            CAR_002_FLOOR_007_SERVICE_014 : ASSIGNER
+                            CAR_003_FLOOR_001_SERVICE_015 : ASSIGNER
+                            CAR_003_FLOOR_002_SERVICE_016 : ASSIGNER
+                            CAR_003_FLOOR_003_SERVICE_017 : ASSIGNER
+                            CAR_003_FLOOR_004_SERVICE_018 : ASSIGNER
+                            CAR_003_FLOOR_005_SERVICE_019 : ASSIGNER
+                            CAR_003_FLOOR_006_SERVICE_020 : ASSIGNER
+                            CAR_003_FLOOR_007_SERVICE_021 : ASSIGNER
+
+                    EntityObject:Car_Stop
+                        Object
+                            | Identity     | State
+                            CAR_STOP_001 : Awaiting_Floor
+                            CAR_STOP_002 : Awaiting_Floor
+                            CAR_STOP_003 : Awaiting_Floor
+                        ObjectRelation:Directs:Car
+                            CAR_STOP_001 : CAR_001
+                            CAR_STOP_002 : CAR_002
+                            CAR_STOP_003 : CAR_003
+
+                    EntityObject:Service_Assigner
+                        Object
+                            | Identity | State
+                            ASSIGNER   : Idle
+                        ObjectRelation:Assigns:Car_Service
+                            ASSIGNER : CAR_001_FLOOR_001_SERVICE_001
+                            ASSIGNER : CAR_001_FLOOR_002_SERVICE_002
+                            ASSIGNER : CAR_001_FLOOR_003_SERVICE_003
+                            ASSIGNER : CAR_001_FLOOR_004_SERVICE_004
+                            ASSIGNER : CAR_001_FLOOR_005_SERVICE_005
+                            ASSIGNER : CAR_001_FLOOR_006_SERVICE_006
+                            ASSIGNER : CAR_001_FLOOR_007_SERVICE_007
+                            ASSIGNER : CAR_002_FLOOR_001_SERVICE_008
+                            ASSIGNER : CAR_002_FLOOR_002_SERVICE_009
+                            ASSIGNER : CAR_002_FLOOR_003_SERVICE_010
+                            ASSIGNER : CAR_002_FLOOR_004_SERVICE_011
+                            ASSIGNER : CAR_002_FLOOR_005_SERVICE_012
+                            ASSIGNER : CAR_002_FLOOR_006_SERVICE_013
+                            ASSIGNER : CAR_002_FLOOR_007_SERVICE_014
+                            ASSIGNER : CAR_003_FLOOR_001_SERVICE_015
+                            ASSIGNER : CAR_003_FLOOR_002_SERVICE_016
+                            ASSIGNER : CAR_003_FLOOR_003_SERVICE_017
+                            ASSIGNER : CAR_003_FLOOR_004_SERVICE_018
+                            ASSIGNER : CAR_003_FLOOR_005_SERVICE_019
+                            ASSIGNER : CAR_003_FLOOR_006_SERVICE_020
+                            ASSIGNER : CAR_003_FLOOR_007_SERVICE_021
+
+                    EntityObject:Car
+                        Object
+                            | Identity | State      | Current_direction
+                            CAR_001    : Stationary :                UP
+                            CAR_002    : Stationary :                UP
+                            CAR_003    : Stationary :                UP
+                        ObjectRelation:Services:Car_Service
+                            CAR_001 : CAR_001_FLOOR_001_SERVICE_001
+                            CAR_001 : CAR_001_FLOOR_002_SERVICE_002
+                            CAR_001 : CAR_001_FLOOR_003_SERVICE_003
+                            CAR_001 : CAR_001_FLOOR_004_SERVICE_004
+                            CAR_001 : CAR_001_FLOOR_005_SERVICE_005
+                            CAR_001 : CAR_001_FLOOR_006_SERVICE_006
+                            CAR_001 : CAR_001_FLOOR_007_SERVICE_007
+                            CAR_002 : CAR_002_FLOOR_001_SERVICE_008
+                            CAR_002 : CAR_002_FLOOR_002_SERVICE_009
+                            CAR_002 : CAR_002_FLOOR_003_SERVICE_010
+                            CAR_002 : CAR_002_FLOOR_004_SERVICE_011
+                            CAR_002 : CAR_002_FLOOR_005_SERVICE_012
+                            CAR_002 : CAR_002_FLOOR_006_SERVICE_013
+                            CAR_002 : CAR_002_FLOOR_007_SERVICE_014
+                            CAR_003 : CAR_003_FLOOR_001_SERVICE_015
+                            CAR_003 : CAR_003_FLOOR_002_SERVICE_016
+                            CAR_003 : CAR_003_FLOOR_003_SERVICE_017
+                            CAR_003 : CAR_003_FLOOR_004_SERVICE_018
+                            CAR_003 : CAR_003_FLOOR_005_SERVICE_019
+                            CAR_003 : CAR_003_FLOOR_006_SERVICE_020
+                            CAR_003 : CAR_003_FLOOR_007_SERVICE_021
+                        ObjectRelation:Currently_at:Floor
+                            CAR_001 : FLOOR_001
+                            CAR_002 : FLOOR_001
+                            CAR_003 : FLOOR_001
+                        ObjectRelation:Accessed_through:Door
+                            CAR_001 : DOOR_001
+                            CAR_002 : DOOR_002
+                            CAR_003 : DOOR_003

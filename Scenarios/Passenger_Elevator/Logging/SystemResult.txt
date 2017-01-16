@@ -1,0 +1,12 @@
+
+EVENT -> Machinery::Door_Opening
+
+EVENT -> Machinery::Door_Closing
+
+EVENT -> Machinery::Car.Moving (Direction:UP)
+
+EVENT -> Machinery::Car.Slowing ()
+
+EVENT -> Machinery::Door_Opening
+
+EVENT -> Machinery::Door_Closing
